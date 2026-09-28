@@ -4,12 +4,12 @@
 #include <ctime>
 
 // PostgreSQL C++ Client Library Header
-// #include <pqxx/pqxx>
+#include <pqxx/pqxx>
 
 // Note: When you integrate Qt later, your GUI file will include Qt headers like:
-// #include <QApplication>
-// #include <QMainWindow>
-// #include <QTableWidget>
+#include <QApplication>
+#include <QMainWindow>
+#include <QTableWidget>
 
 using namespace std;
 
