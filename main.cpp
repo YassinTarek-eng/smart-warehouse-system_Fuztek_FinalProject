@@ -6,10 +6,12 @@
 // PostgreSQL C++ Client Library Header
 #include <pqxx/pqxx>
 
-// Note: When you integrate Qt later, your GUI file will include Qt headers like:
-#include <QApplication>
-#include <QMainWindow>
-#include <QTableWidget>
+// FLTK GUI headers (replaces the old Qt headers)
+#include <FL/Fl.H>
+#include <FL/Fl_Window.H>
+#include <FL/Fl_Hold_Browser.H>
+#include <FL/Fl_Button.H>
+#include <FL/fl_ask.H>
 
 using namespace std;
 
@@ -285,34 +287,48 @@ public:
 
 
 // ============================================================================
-// TEAM MEMBER 5: GUI Presentation Layer & Desktop Windows (Qt Framework)
+// TEAM MEMBER 5: GUI Presentation Layer & Desktop Windows (FLTK Framework)
 // ============================================================================
 class GUIController {
 private:
     bool isWindowOpen;
+    Fl_Window* window;
+    Fl_Hold_Browser* inventoryTable;
 
 public:
     GUIController() {
         isWindowOpen = false;
+        window = nullptr;
+        inventoryTable = nullptr;
     }
 
     void openMainWindow() {
-        // TODO [Member 5]: Initialize Qt window layout and buttons
-        cout << "[GUI] Opening Smart Warehouse Desktop Window via Qt..." << endl;
+        // TODO [Member 5]: Add more buttons, tabs and layout to the FLTK window
+        cout << "[GUI] Opening Smart Warehouse Desktop Window via FLTK..." << endl;
+        window = new Fl_Window(700, 450, "Smart Warehouse System");
+        inventoryTable = new Fl_Hold_Browser(10, 10, 680, 380);
+        Fl_Button* closeBtn = new Fl_Button(590, 400, 100, 40, "Close");
+        closeBtn->callback([](Fl_Widget*, void* w) { ((Fl_Window*)w)->hide(); }, window);
+        window->end();
+        window->show();
         isWindowOpen = true;
     }
 
     void displayInventoryTable(const vector<Product>& products) {
-        // TODO [Member 5]: Populate QTableWidget widgets on screen with product data
+        // TODO [Member 5]: Add columns (use column_widths) and refresh logic
         cout << "[GUI] Rendering inventory table on screen..." << endl;
+        inventoryTable->clear();
         for (const auto& p : products) {
-            cout << "   -> Table Row: " << p.getName() << " | Stock: " << p.getStock() << endl;
+            string row = p.getName() + " | Stock: " + to_string(p.getStock());
+            inventoryTable->add(row.c_str());
+            cout << "   -> Table Row: " << row << endl;
         }
     }
 
     void showAlertPopup(string message) {
-        // TODO [Member 5]: Trigger QMessageBox popup warning dialog on desktop UI
+        // TODO [Member 5]: Customize the warning dialog if needed
         cout << "[GUI Alert Popup]: " << message << endl;
+        fl_alert("%s", message.c_str());
     }
 };
 
@@ -359,5 +375,7 @@ int main() {
     gui.showAlertPopup("Low Stock Alert: Conveyor Belt Motor has only 5 units left!");
 
     cout << "\nProgram executed successfully." << endl;
-    return 0;
+
+    // Keep the window open until the user closes it
+    return Fl::run();
 }
