@@ -2,16 +2,21 @@
 #include <vector>
 #include <string>
 #include <ctime>
+#include <algorithm>
 
-// PostgreSQL C++ Client Library Header
+// PostgreSQL C++ Client Library Header (must come BEFORE windows.h)
 #include <pqxx/pqxx>
 
-// FLTK GUI headers (replaces the old Qt headers)
-#include <FL/Fl.H>
-#include <FL/Fl_Window.H>
-#include <FL/Fl_Hold_Browser.H>
-#include <FL/Fl_Button.H>
-#include <FL/fl_ask.H>
+#undef UNICODE
+#undef _UNICODE
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commctrl.h>
+#include <cstdio>
+#include <cstdlib>
+
 
 using namespace std;
 
@@ -208,32 +213,59 @@ private:
     string supplierName;
     string contactEmail;
     vector<int> suppliedProductIds;
-
+ 
 public:
     Supplier(int id, string name, string email) {
         supplierId = id;
         supplierName = name;
         contactEmail = email;
     }
-
+ 
     int getId() const {
-        // TODO [Member 3]: Return supplier ID
         return supplierId;
     }
-
+ 
     string getName() const {
-        // TODO [Member 3]: Return supplier name
         return supplierName;
     }
-
+ 
+    // Appends a product ID to the supplied items list
     void addSuppliedProduct(int productId) {
-        // TODO [Member 3]: Link product ID to this supplier
-        suppliedProductIds.push_back(productId);
+        if (!suppliesProduct(productId)) {
+            suppliedProductIds.push_back(productId);
+        } else {
+            cout << "[Supplier] Product " << productId
+                 << " is already linked to " << supplierName << endl;
+        }
     }
-
+ 
+    // Prints vendor contact information and the products they supply
     void displaySupplier() const {
-        // TODO [Member 3]: Print supplier details and vendor contact info
-        cout << "Supplier: " << supplierName << " (Contact: " << contactEmail << ")" << endl;
+        cout << "Supplier #" << supplierId << ": " << supplierName
+             << " (Contact: " << contactEmail << ")" << endl;
+        cout << "  Supplies product IDs: ";
+        if (suppliedProductIds.empty()) {
+            cout << "none";
+        } else {
+            for (size_t i = 0; i < suppliedProductIds.size(); i++) {
+                cout << suppliedProductIds[i];
+                if (i + 1 < suppliedProductIds.size()) cout << ", ";
+            }
+        }
+        cout << endl;
+    }
+ 
+    string getEmail() const {
+        return contactEmail;
+    }
+ 
+    const vector<int>& getSuppliedProducts() const {
+        return suppliedProductIds;
+    }
+ 
+    bool suppliesProduct(int productId) const {
+        return find(suppliedProductIds.begin(), suppliedProductIds.end(), productId)
+               != suppliedProductIds.end();
     }
 };
 
@@ -291,44 +323,189 @@ public:
 // ============================================================================
 class GUIController {
 private:
-    bool isWindowOpen;
-    Fl_Window* window;
-    Fl_Hold_Browser* inventoryTable;
-
+    enum { ID_ADD = 1, ID_PLUS, ID_MINUS, ID_CLOSE };
+ 
+    HWND window;
+    HWND list;
+    HWND nameEdit;
+    HWND priceEdit;
+    HWND stockEdit;
+    vector<Product>& products;
+    int nextId;
+ 
+    // ---- helpers -----------------------------------------------------------
+    string getText(HWND edit) const {
+        char buf[256];
+        GetWindowTextA(edit, buf, sizeof(buf));
+        return string(buf);
+    }
+ 
+    int selectedIndex() const {
+        return ListView_GetNextItem(list, -1, LVNI_SELECTED);   // -1 = nothing selected
+    }
+ 
+    HWND makeControl(const char* cls, const char* text, DWORD style,
+                     int x, int y, int w, int h, int id = 0) {
+        return CreateWindowExA(0, cls, text, WS_CHILD | WS_VISIBLE | style,
+                               x, y, w, h, window, (HMENU)(INT_PTR)id,
+                               GetModuleHandleA(NULL), NULL);
+    }
+ 
+    // ---- button actions ----------------------------------------------------
+    void addProduct() {
+        string name = getText(nameEdit);
+        double price = atof(getText(priceEdit).c_str());
+        int stock = atoi(getText(stockEdit).c_str());
+ 
+        if (name.empty() || price <= 0 || stock < 0) {
+            showAlertPopup("Please enter a name, a price > 0 and a stock amount.");
+            return;
+        }
+        products.push_back(Product(nextId++, name, price, stock));
+        refreshTable();
+        SetWindowTextA(nameEdit, "");
+        SetWindowTextA(priceEdit, "");
+        SetWindowTextA(stockEdit, "");
+    }
+ 
+    void changeStock(int sign) {
+        int idx = selectedIndex();
+        if (idx < 0) { showAlertPopup("Please select a product in the table first."); return; }
+ 
+        int amount = atoi(getText(stockEdit).c_str());
+        if (amount <= 0) { showAlertPopup("Type an amount greater than 0 in the Stock box."); return; }
+ 
+        products[idx].updateStock(sign * amount);
+        refreshTable();
+        ListView_SetItemState(list, idx, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);   // keep row selected
+ 
+        if (products[idx].getStock() < 10)
+            showAlertPopup("Low Stock Alert: " + products[idx].getName() +
+                           " has only " + to_string(products[idx].getStock()) + " units left!");
+    }
+ 
+    // ---- Windows plumbing --------------------------------------------------
+    static BOOL CALLBACK applyFont(HWND child, LPARAM) {
+        SendMessageA(child, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        return TRUE;
+    }
+ 
+    static LRESULT CALLBACK windowProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+        if (msg == WM_NCCREATE) {   // remember which GUIController owns this window
+            CREATESTRUCTA* cs = (CREATESTRUCTA*)l;
+            SetWindowLongPtrA(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+            return DefWindowProcA(h, msg, w, l);
+        }
+        GUIController* self = (GUIController*)GetWindowLongPtrA(h, GWLP_USERDATA);
+ 
+        if (msg == WM_COMMAND && self) {
+            switch (LOWORD(w)) {
+                case ID_ADD:   self->addProduct();    break;
+                case ID_PLUS:  self->changeStock(+1); break;
+                case ID_MINUS: self->changeStock(-1); break;
+                case ID_CLOSE: DestroyWindow(h);      break;
+            }
+            return 0;
+        }
+        if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
+        return DefWindowProcA(h, msg, w, l);
+    }
+ 
 public:
-    GUIController() {
-        isWindowOpen = false;
-        window = nullptr;
-        inventoryTable = nullptr;
-    }
-
+    GUIController(vector<Product>& productList)
+        : window(NULL), list(NULL), nameEdit(NULL), priceEdit(NULL),
+          stockEdit(NULL), products(productList), nextId(1000) {}
+ 
+    // Opens the window and keeps running until the user closes it
     void openMainWindow() {
-        // TODO [Member 5]: Add more buttons, tabs and layout to the FLTK window
-        cout << "[GUI] Opening Smart Warehouse Desktop Window via FLTK..." << endl;
-        window = new Fl_Window(700, 450, "Smart Warehouse System");
-        inventoryTable = new Fl_Hold_Browser(10, 10, 680, 380);
-        Fl_Button* closeBtn = new Fl_Button(590, 400, 100, 40, "Close");
-        closeBtn->callback([](Fl_Widget*, void* w) { ((Fl_Window*)w)->hide(); }, window);
-        window->end();
-        window->show();
-        isWindowOpen = true;
-    }
-
-    void displayInventoryTable(const vector<Product>& products) {
-        // TODO [Member 5]: Add columns (use column_widths) and refresh logic
-        cout << "[GUI] Rendering inventory table on screen..." << endl;
-        inventoryTable->clear();
-        for (const auto& p : products) {
-            string row = p.getName() + " | Stock: " + to_string(p.getStock());
-            inventoryTable->add(row.c_str());
-            cout << "   -> Table Row: " << row << endl;
+        cout << "[GUI] Opening Smart Warehouse Desktop Window (Win32)..." << endl;
+ 
+        INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES };
+        InitCommonControlsEx(&icc);
+ 
+        WNDCLASSA wc = {};
+        wc.lpfnWndProc   = windowProc;
+        wc.hInstance     = GetModuleHandleA(NULL);
+        wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = "WarehouseWindow";
+        RegisterClassA(&wc);
+ 
+        window = CreateWindowExA(0, "WarehouseWindow", "Smart Warehouse System",
+                                 WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+                                 CW_USEDEFAULT, CW_USEDEFAULT, 716, 500,
+                                 NULL, NULL, wc.hInstance, this);
+ 
+        // --- table (ListView with 4 columns) ---
+        list = makeControl(WC_LISTVIEWA, "", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER,
+                           10, 10, 680, 290);
+        ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+ 
+        const char* titles[] = { "ID", "Name", "Price", "Stock" };
+        int widths[]         = {  70,   320,    140,     130 };
+        for (int i = 0; i < 4; i++) {
+            LVCOLUMNA col = {};
+            col.mask    = LVCF_TEXT | LVCF_WIDTH;
+            col.pszText = (LPSTR)titles[i];
+            col.cx      = widths[i];
+            SendMessageA(list, LVM_INSERTCOLUMNA, i, (LPARAM)&col);
+        }
+ 
+        // --- labels + input boxes ---
+        makeControl("STATIC", "Product name", 0, 10, 315, 120, 18);
+        makeControl("STATIC", "Price", 0, 320, 315, 100, 18);
+        makeControl("STATIC", "Stock / Amount", 0, 440, 315, 120, 18);
+        nameEdit  = makeControl("EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 10, 335, 300, 24);
+        priceEdit = makeControl("EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 320, 335, 110, 24);
+        stockEdit = makeControl("EDIT", "", WS_BORDER | ES_NUMBER, 440, 335, 110, 24);
+ 
+        // --- buttons ---
+        makeControl("BUTTON", "Add Product",      BS_PUSHBUTTON, 10, 385, 130, 32, ID_ADD);
+        makeControl("BUTTON", "Add Stock (+)",    BS_PUSHBUTTON, 150, 385, 130, 32, ID_PLUS);
+        makeControl("BUTTON", "Remove Stock (-)", BS_PUSHBUTTON, 290, 385, 150, 32, ID_MINUS);
+        makeControl("BUTTON", "Close",            BS_PUSHBUTTON, 590, 385, 100, 32, ID_CLOSE);
+ 
+        EnumChildWindows(window, applyFont, 0);   // nicer font on every control
+        refreshTable();
+ 
+        ShowWindow(window, SW_SHOW);
+        UpdateWindow(window);
+ 
+        MSG msg;
+        while (GetMessageA(&msg, NULL, 0, 0) > 0) {   // keeps window alive until closed
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
         }
     }
+ 
+    void refreshTable() {
+        ListView_DeleteAllItems(list);
+        for (size_t i = 0; i < products.size(); i++) {
+            const Product& p = products[i];
+            char idText[32], priceText[32], stockText[32];
+            snprintf(idText, sizeof(idText), "%d", p.getId());
+            snprintf(priceText, sizeof(priceText), "$%.2f", p.getPrice());
+            snprintf(stockText, sizeof(stockText), "%d", p.getStock());
+ 
+            string name = p.getName();
+            LVITEMA item = {};
+            item.mask     = LVIF_TEXT;
+            item.iItem    = (int)i;
+            item.pszText  = idText;
+            ListView_InsertItem(list, &item);
+            ListView_SetItemText(list, (int)i, 1, (LPSTR)name.c_str());
+            ListView_SetItemText(list, (int)i, 2, priceText);
+            ListView_SetItemText(list, (int)i, 3, stockText);
+        }
+    }
+ 
 
+    void displayInventoryTable(const vector<Product>&) { refreshTable(); }
+ 
     void showAlertPopup(string message) {
-        // TODO [Member 5]: Customize the warning dialog if needed
         cout << "[GUI Alert Popup]: " << message << endl;
-        fl_alert("%s", message.c_str());
+        MessageBoxA(window, message.c_str(), "Warehouse Alert", MB_OK | MB_ICONWARNING);
     }
 };
 
@@ -369,13 +546,9 @@ int main() {
     myOrder.displayOrder();
 
     // 6. Test GUI Controller (Member 5)
-    GUIController gui;
-    gui.openMainWindow();
-    gui.displayInventoryTable(productList);
+    GUIController gui(productList);
     gui.showAlertPopup("Low Stock Alert: Conveyor Belt Motor has only 5 units left!");
-
+    gui.openMainWindow();      // runs until the window is closed
     cout << "\nProgram executed successfully." << endl;
-
-    // Keep the window open until the user closes it
-    return Fl::run();
+    return 0;
 }
