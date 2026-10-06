@@ -17,7 +17,6 @@
 #include <cstdio>
 #include <cstdlib>
 
-
 using namespace std;
 
 // ============================================================================
@@ -295,7 +294,6 @@ public:
         return supplierName;
     }
  
-    // Appends a product ID to the supplied items list
     void addSuppliedProduct(int productId) {
         if (!suppliesProduct(productId)) {
             suppliedProductIds.push_back(productId);
@@ -305,7 +303,6 @@ public:
         }
     }
  
-    // Prints vendor contact information and the products they supply
     void displaySupplier() const {
         cout << "Supplier #" << supplierId << ": " << supplierName
              << " (Contact: " << contactEmail << ")" << endl;
@@ -518,7 +515,6 @@ private:
             showAlertPopup("Failed to update price in database.");
         }
     }
- 
 
     void deleteProduct() {                         ////////////////////////Added Function
         int idx = selectedIndex();
