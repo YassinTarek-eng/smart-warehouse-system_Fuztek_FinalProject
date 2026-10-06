@@ -1,2 +1,13 @@
 .vscode
 main.exe
+app.rc
+libcrypto-3-x64.dll
+libgcc_s_seh-1.dll
+libpq.dll
+libpqxx.dll
+libssl-3-x64.dll
+libstdc++-6.dll
+libwinpthread-1.dll
+README.md
+warehouse.ico
+Smart Warehouse Management System.pdfa
