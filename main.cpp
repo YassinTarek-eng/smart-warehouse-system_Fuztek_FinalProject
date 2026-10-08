@@ -20,7 +20,7 @@
 using namespace std;
 
 // ============================================================================
-// TEAM MEMBER 2: Product & Inventory Management (Defined first so DatabaseManager can use it)
+// CLASS: Category
 // ============================================================================
 class Category {
 private:
@@ -33,11 +33,19 @@ public:
         categoryName = name;
     }
 
+    int getId() const {
+        return categoryId;
+    }
+
     string getCategoryName() const {
         return categoryName;
     }
 };
 
+
+// ============================================================================
+// CLASS: Product
+// ============================================================================
 class Product {
 private:
     int productId;
@@ -79,6 +87,10 @@ public:
         return stockQuantity;
     }
 
+    int getCategoryId() const {
+        return categoryId;
+    }
+
     void updateStock(int amount) {
         stockQuantity += amount;
         if (stockQuantity < 0) {
@@ -96,15 +108,21 @@ public:
 
 
 // ============================================================================
-// TEAM LEADER: YASSIN
-// RESPONSIBILITY: PostgreSQL Connection, Singleton Pattern & Table Setup (using libpqxx)
+// CLASS: DatabaseManager
 // ============================================================================
+struct OrderRecord {
+    string name, type, price, qty, status, time;
+};
+
+class User;
+class Supplier;
+class Order;
+
 class DatabaseManager {
 private:
     pqxx::connection* conn;
     bool isConnectedStatus;
 
-    // Private constructor prevents creating multiple instances (Singleton)
     DatabaseManager() {
         try {
             string conn_str = "dbname=smart_warehouse user=postgres password=postgres host=127.0.0.1 port=5432";
@@ -130,11 +148,9 @@ private:
     }
 
 public:
-    // Delete copy constructor and assignment operator for safety (Singleton pattern)
     DatabaseManager(const DatabaseManager&) = delete;
     DatabaseManager& operator=(const DatabaseManager&) = delete;
 
-    // Global access point to get the single database instance
     static DatabaseManager& getInstance() {
         static DatabaseManager instance;
         return instance;
@@ -146,7 +162,9 @@ public:
 
     bool executeQuery(const string& sqlQuery) {
         try {
-            if (!conn || !conn->is_open()) return false;
+            if (!conn || !conn->is_open()) {
+                return false;
+            }
             pqxx::work txn(*conn);
             txn.exec(sqlQuery);
             txn.commit();
@@ -158,38 +176,17 @@ public:
         }
     }
 
-    bool deleteProductFromDB(int productId) {
-        try {
-            if (!conn || !conn->is_open()) return false;
-            pqxx::work txn(*conn);
-            
-            // 1. Delete the specific product
-            string sql = "DELETE FROM products WHERE id = " + to_string(productId) + ";";
-            txn.exec(sql);
-            
-            // 2. Check if the table is now completely empty
-            pqxx::result checkRes = txn.exec("SELECT COUNT(*) FROM products;");
-            if (!checkRes.empty() && checkRes[0][0].as<int>() == 0) {
-                // If empty, reset the auto-incrementing ID sequence back to 1
-                txn.exec("ALTER SEQUENCE products_id_seq RESTART WITH 1;");
-                cout << "[Database] Table is empty. ID sequence reset to 1." << endl;
-            }
-            
-            txn.commit();
-            cout << "[Database] Product deleted from PostgreSQL: ID " << productId << endl;
-            return true;
-        } catch (const exception& e) {
-            cerr << "[Delete Error]: " << e.what() << endl;
-            return false;
-        }
-    }
-
     void initializeTables() {
         string usersTable = "CREATE TABLE IF NOT EXISTS users ("
                              "id SERIAL PRIMARY KEY, "
                              "username VARCHAR(64) UNIQUE NOT NULL, "
                              "password VARCHAR(64) NOT NULL, "
                              "role VARCHAR(32) NOT NULL);";
+
+        string suppliersTable = "CREATE TABLE IF NOT EXISTS suppliers ("
+                                "id SERIAL PRIMARY KEY, "
+                                "name VARCHAR(64) NOT NULL, "
+                                "email VARCHAR(128) NOT NULL);";
 
         string productsTable = "CREATE TABLE IF NOT EXISTS products ("
                                 "id SERIAL PRIMARY KEY, "
@@ -199,18 +196,30 @@ public:
                                 "category_id INT, "
                                 "supplier_id INT);";
 
+        string ordersTable = "CREATE TABLE IF NOT EXISTS orders ("
+                             "id SERIAL PRIMARY KEY, "
+                             "product_name VARCHAR(64) NOT NULL, "
+                             "type VARCHAR(32) NOT NULL, "
+                             "price NUMERIC(10,2) NOT NULL, "
+                             "quantity INT NOT NULL, "
+                             "status VARCHAR(32) NOT NULL, "
+                             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);";
+
         executeQuery(usersTable);
+        executeQuery(suppliersTable);
         executeQuery(productsTable);
+        executeQuery(ordersTable);
         cout << "[Database] Warehouse database tables initialized successfully." << endl;
     }
 
     vector<Product> loadProductsFromDB() {
         vector<Product> dbProducts;
         try {
-            if (!conn || !conn->is_open()) return dbProducts;
+            if (!conn || !conn->is_open()) {
+                return dbProducts;
+            }
             
             pqxx::work txn(*conn);
-            // Added ORDER BY id ASC to keep the list neatly sorted
             pqxx::result res = txn.exec("SELECT id, name, price, quantity FROM products ORDER BY id ASC;");
             
             for (auto row : res) {
@@ -221,187 +230,85 @@ public:
                 
                 dbProducts.push_back(Product(id, name, price, quantity));
             }
-            cout << "[Database] Successfully loaded " << dbProducts.size() << " products from PostgreSQL." << endl;
         } catch (const exception& e) {
-            cerr << "[Load Error]: " << e.what() << endl;
+            cerr << "[Load Products Error]: " << e.what() << endl;
         }
         return dbProducts;
     }
-};
 
-
-// ============================================================================
-// TEAM MEMBER 1: User Authentication & Roles
-// ============================================================================
-class User {
-private:
-    int userId;
-    string username;
-    string passwordHash;
-    string role; // "Clerk" or "Manager"
-
-public:
-    User(int id, string uname, string pwd, string r) {
-        userId = id;
-        username = uname;
-        passwordHash = pwd;
-        role = r;
-    }
-
-    string getUsername() const {
-        return username;
-    }
-
-    string getRole() const {
-        return role;
-    }
-
-    bool authenticate(string inputPassword) const {
-        if (passwordHash == inputPassword) {
-            return true;
-        }
-        return false;
-    }
-
-    void displayUser() const {
-        cout << "User: " << username << " [Role: " << role << "]" << endl;
-    }
-};
-
-
-// ============================================================================
-// TEAM MEMBER 3: Supplier Management
-// ============================================================================
-class Supplier {
-private:
-    int supplierId;
-    string supplierName;
-    string contactEmail;
-    vector<int> suppliedProductIds;
- 
-public:
-    Supplier(int id, string name, string email) {
-        supplierId = id;
-        supplierName = name;
-        contactEmail = email;
-    }
- 
-    int getId() const {
-        return supplierId;
-    }
- 
-    string getName() const {
-        return supplierName;
-    }
- 
-    void addSuppliedProduct(int productId) {
-        if (!suppliesProduct(productId)) {
-            suppliedProductIds.push_back(productId);
-        } else {
-            cout << "[Supplier] Product " << productId
-                 << " is already linked to " << supplierName << endl;
-        }
-    }
- 
-    void displaySupplier() const {
-        cout << "Supplier #" << supplierId << ": " << supplierName
-             << " (Contact: " << contactEmail << ")" << endl;
-        cout << "  Supplies product IDs: ";
-        if (suppliedProductIds.empty()) {
-            cout << "none";
-        } else {
-            for (size_t i = 0; i < suppliedProductIds.size(); i++) {
-                cout << suppliedProductIds[i];
-                if (i + 1 < suppliedProductIds.size()) cout << ", ";
+    vector<OrderRecord> loadOrdersFromDB() {
+        vector<OrderRecord> out;
+        try {
+            if (!conn || !conn->is_open()) {
+                return out;
             }
+            pqxx::work txn(*conn);
+            pqxx::result res = txn.exec(
+                "SELECT product_name, type, price, quantity, status, "
+                "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created "
+                "FROM orders ORDER BY id DESC;");
+            for (auto row : res) {
+                OrderRecord o;
+                o.name   = row["product_name"].as<string>();
+                o.type   = row["type"].as<string>();
+                o.price  = "$" + row["price"].as<string>();
+                o.qty    = row["quantity"].as<string>();
+                o.status = row["status"].as<string>();
+                o.time   = row["created"].as<string>();
+                out.push_back(o);
+            }
+        } catch (const exception& e) {
+            cerr << "[Load Orders Error]: " << e.what() << endl;
         }
-        cout << endl;
+        return out;
     }
- 
-    string getEmail() const {
-        return contactEmail;
-    }
- 
-    const vector<int>& getSuppliedProducts() const {
-        return suppliedProductIds;
-    }
- 
-    bool suppliesProduct(int productId) const {
-        return find(suppliedProductIds.begin(), suppliedProductIds.end(), productId)
-               != suppliedProductIds.end();
+
+    bool deleteProductFromDB(int productId) {
+        try {
+            if (!conn || !conn->is_open()) {
+                return false;
+            }
+            
+            pqxx::work txn(*conn);
+            string sql = "DELETE FROM products WHERE id = " + to_string(productId) + ";";
+            txn.exec(sql);
+            
+            pqxx::result checkRes = txn.exec("SELECT COUNT(*) FROM products;");
+            if (!checkRes.empty() && checkRes[0][0].as<int>() == 0) {
+                txn.exec("ALTER SEQUENCE products_id_seq RESTART WITH 1;");
+            }
+            
+            txn.commit();
+            return true;
+        } catch (const exception& e) {
+            cerr << "[Delete Product Error]: " << e.what() << endl;
+            return false;
+        }
     }
 };
 
 
 // ============================================================================
-// TEAM MEMBER 4: Order Processing & Transactions
-// ============================================================================
-class Order {
-private:
-    int orderId;
-    vector<pair<Product, int>> orderedItems;
-    double totalAmount;
-    string status; // "Pending", "Completed", "Cancelled"
-
-public:
-    Order(int id) {
-        orderId = id;
-        totalAmount = 0.0;
-        status = "Pending";
-    }
-
-    void addProduct(const Product& product, int quantity) {
-        orderedItems.push_back({product, quantity});
-        totalAmount += product.getPrice() * quantity;
-    }
-
-    void setStatus(string newStatus) {
-        status = newStatus;
-    }
-
-    void displayOrder() const {
-        cout << "========================================" << endl;
-        cout << "ORDER RECEIPT #" << orderId << " [Status: " << status << "]" << endl;
-        cout << "----------------------------------------" << endl;
-        
-        for (const auto& item : orderedItems) {
-            cout << "  - " << item.first.getName() 
-                 << " x " << item.second 
-                 << " @ $" << item.first.getPrice() 
-                 << " = $" << (item.first.getPrice() * item.second) << endl;
-        }
-        
-        cout << "----------------------------------------" << endl;
-        cout << "Total Cost: $" << totalAmount << endl;
-        cout << "========================================" << endl;
-    }
-};
-
-
-// ============================================================================
-// TEAM MEMBER 5: GUI Presentation Layer & Desktop Windows (Win32 API)
+// CLASS: GUIController (Win32 API Interface)
 // ============================================================================
 class GUIController {
 private:
-    enum { ID_ADD = 1, ID_PLUS, ID_MINUS, ID_PRICE, ID_DELETE, ID_CLOSE };     ////////////////changed
+    enum { 
+        ID_TAB = 100, ID_ADD, ID_PLUS, ID_MINUS, ID_PRICE, ID_DELETE, ID_CLOSE
+    };
  
     HWND window;
-    HWND list;
-    HWND nameEdit;
-    HWND priceEdit;
-    HWND stockEdit;
-    HWND supplierEdit;
+    HWND tabControl;
+    HWND inventoryList;
+    HWND ordersList;
+    HWND nameEdit, priceEdit, stockEdit, supplierEdit;
     vector<Product>& products;
-    int nextId;
+    string currentUserRole;
  
     string getText(HWND edit) const {
         char buf[256];
         GetWindowTextA(edit, buf, sizeof(buf));
         return string(buf);
-    }
- 
-    int selectedIndex() const {
-        return ListView_GetNextItem(list, -1, LVNI_SELECTED);
     }
  
     HWND makeControl(const char* cls, const char* text, DWORD style,
@@ -410,12 +317,36 @@ private:
                                x, y, w, h, window, (HMENU)(INT_PTR)id,
                                GetModuleHandleA(NULL), NULL);
     }
- 
+
+    void loadOrdersIntoView() {
+        ListView_DeleteAllItems(ordersList);
+
+        vector<OrderRecord> rows = DatabaseManager::getInstance().loadOrdersFromDB();
+        if (rows.empty()) {
+            // Sample rows so the tab is never blank (DB offline or no orders yet)
+            rows.push_back({"Steel Bracket",  "Requested Supply",  "$12.50",  "50", "Pending Delivery", "2026-10-08 10:15:00"});
+            rows.push_back({"Conveyor Motor", "Incoming Delivery", "$450.00", "5",  "Dispatched",       "2026-10-08 12:30:00"});
+        }
+
+        for (size_t i = 0; i < rows.size(); i++) {
+            LVITEMA item = {};
+            item.mask = LVIF_TEXT;
+            item.iItem = (int)i;
+            item.pszText = (LPSTR)rows[i].name.c_str();
+            ListView_InsertItem(ordersList, &item);
+            ListView_SetItemText(ordersList, (int)i, 1, (LPSTR)rows[i].type.c_str());
+            ListView_SetItemText(ordersList, (int)i, 2, (LPSTR)rows[i].price.c_str());
+            ListView_SetItemText(ordersList, (int)i, 3, (LPSTR)rows[i].qty.c_str());
+            ListView_SetItemText(ordersList, (int)i, 4, (LPSTR)rows[i].status.c_str());
+            ListView_SetItemText(ordersList, (int)i, 5, (LPSTR)rows[i].time.c_str());
+        }
+    }
+
     void addProduct() {
         string name = getText(nameEdit);
         double price = atof(getText(priceEdit).c_str());
         int stock = atoi(getText(stockEdit).c_str());
-        int supplierId = atoi(getText(supplierEdit).c_str()); // Read dynamic supplier ID
+        int supplierId = atoi(getText(supplierEdit).c_str());
 
         if (name.empty() || price <= 0 || stock < 0 || supplierId <= 0) {
             showAlertPopup("Please enter valid name, price, stock, and supplier ID.");
@@ -428,120 +359,97 @@ private:
         
         if (db.executeQuery(sql)) {
             products = db.loadProductsFromDB();
-            refreshTable();
-            
+            refreshInventoryTable();
             SetWindowTextA(nameEdit, "");
             SetWindowTextA(priceEdit, "");
             SetWindowTextA(stockEdit, "");
             SetWindowTextA(supplierEdit, "");
-            
-            showAlertPopup("Product successfully added to PostgreSQL with Supplier ID #" + to_string(supplierId) + "!");
+            showAlertPopup("Product successfully added to PostgreSQL!");
         } else {
             showAlertPopup("Failed to save product to database.");
         }
     }
- 
+
     void changeStock(int sign) {
-        int idx = selectedIndex();
-        if (idx < 0) { showAlertPopup("Please select a product in the table first."); return; }
+        int idx = ListView_GetNextItem(inventoryList, -1, LVNI_SELECTED);
+        if (idx < 0) {
+            showAlertPopup("Please select a product in the inventory table first.");
+            return;
+        }
  
         int amount = atoi(getText(stockEdit).c_str());
-        if (amount <= 0) { showAlertPopup("Type an amount greater than 0 in the Stock box."); return; }
+        if (amount <= 0) {
+            showAlertPopup("Type an amount greater than 0 in the Stock box.");
+            return;
+        }
  
-        // Calculate the new stock quantity
         int currentStock = products[idx].getStock();
         int newStock = currentStock + (sign * amount);
         if (newStock < 0) {
             newStock = 0;
         }
 
-        int productId = products[idx].getId();         /////////////////////////////////////
-
-        // Update the PostgreSQL database permanently
+        int productId = products[idx].getId();
         DatabaseManager& db = DatabaseManager::getInstance();
-        string sql = "UPDATE products SET quantity = " + to_string(newStock) + 
-                     " WHERE id = " + to_string(productId) + ";";
+        string sql = "UPDATE products SET quantity = " + to_string(newStock) + " WHERE id = " + to_string(productId) + ";";
 
         if (db.executeQuery(sql)) {
-            // Reload the product list from the database to keep everything synchronized
             products = db.loadProductsFromDB();
-            refreshTable();
-            
-            // Keep the row selected in the UI
-            ListView_SetItemState(list, idx, LVIS_SELECTED | LVIS_FOCUSED,
-                                  LVIS_SELECTED | LVIS_FOCUSED);
- 
-            if (products[idx].getStock() < 10) {
-                showAlertPopup("Low Stock Alert: " + products[idx].getName() +
-                               " has only " + to_string(products[idx].getStock()) + " units left!");
-            } else {
-                showAlertPopup("Stock successfully updated in PostgreSQL database!");
-            }
-        } else {
-            showAlertPopup("Failed to update stock in database.");
-        }///////////////////////////////////////
+            refreshInventoryTable();
+            showAlertPopup("Stock successfully updated in PostgreSQL database!");
+        }
     }
 
-    void updatePrice() {                         ////////////////////////Added Function
-        int idx = selectedIndex();
-        if (idx < 0) { 
-            showAlertPopup("Please select a product in the table first."); 
-            return; 
+    void updatePrice() {
+        int idx = ListView_GetNextItem(inventoryList, -1, LVNI_SELECTED);
+        if (idx < 0) {
+            showAlertPopup("Please select a product in the table first.");
+            return;
         }
 
         double newPrice = atof(getText(priceEdit).c_str());
-        if (newPrice <= 0) { 
-            showAlertPopup("Please enter a valid new price greater than 0."); 
-            return; 
+        if (newPrice <= 0) {
+            showAlertPopup("Please enter a valid new price greater than 0.");
+            return;
         }
 
         int productId = products[idx].getId();
-
-        // Update the price in PostgreSQL permanently
         DatabaseManager& db = DatabaseManager::getInstance();
-        string sql = "UPDATE products SET price = " + to_string(newPrice) + 
-                     " WHERE id = " + to_string(productId) + ";";
+        string sql = "UPDATE products SET price = " + to_string(newPrice) + " WHERE id = " + to_string(productId) + ";";
 
         if (db.executeQuery(sql)) {
             products = db.loadProductsFromDB();
-            refreshTable();
-            
-            // Keep the row selected
-            ListView_SetItemState(list, idx, LVIS_SELECTED | LVIS_FOCUSED,
-                                  LVIS_SELECTED | LVIS_FOCUSED);
-
-            showAlertPopup("Product price successfully updated in PostgreSQL!");
-        } else {
-            showAlertPopup("Failed to update price in database.");
+            refreshInventoryTable();
+            showAlertPopup("Product price successfully updated!");
         }
     }
 
-    void deleteProduct() {                         ////////////////////////Added Function
-        int idx = selectedIndex();
+    void deleteProduct() {
+        if (currentUserRole != "Manager") {
+            showAlertPopup("Access Denied: Only Managers can delete products.");
+            return;
+        }
+
+        int idx = ListView_GetNextItem(inventoryList, -1, LVNI_SELECTED);
         if (idx < 0) {
             showAlertPopup("Please select a product in the table to delete.");
             return;
         }
 
         int productId = products[idx].getId();
-
-        // Delete from PostgreSQL database permanently
         DatabaseManager& db = DatabaseManager::getInstance();
         if (db.deleteProductFromDB(productId)) {
-            // Reload table from database
             products = db.loadProductsFromDB();
-            refreshTable();
-            showAlertPopup("Product successfully deleted from PostgreSQL database!");
-        } else {
-            showAlertPopup("Failed to delete product from database.");
+            refreshInventoryTable();
+            showAlertPopup("Product successfully deleted from database!");
         }
     }
- 
+
     static BOOL CALLBACK applyFont(HWND child, LPARAM) {
         SendMessageA(child, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         return TRUE;
     }
- 
+
     static LRESULT CALLBACK windowProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         if (msg == WM_NCCREATE) {
             CREATESTRUCTA* cs = (CREATESTRUCTA*)l;
@@ -550,31 +458,50 @@ private:
         }
         GUIController* self = (GUIController*)GetWindowLongPtrA(h, GWLP_USERDATA);
  
+        if (msg == WM_NOTIFY && self) {
+            NMHDR* nmhdr = (NMHDR*)l;
+            if (nmhdr->idFrom == ID_TAB && nmhdr->code == TCN_SELCHANGE) {
+                int sel = TabCtrl_GetCurSel(self->tabControl);
+                if (sel == 0) {
+                    ShowWindow(self->inventoryList, SW_SHOW);
+                    ShowWindow(self->ordersList, SW_HIDE);
+                } else if (sel == 1) {
+                    ShowWindow(self->inventoryList, SW_HIDE);
+                    ShowWindow(self->ordersList, SW_SHOW);
+                    self->loadOrdersIntoView();
+                }
+            }
+        }
+
         if (msg == WM_COMMAND && self) {
             switch (LOWORD(w)) {
                 case ID_ADD:   self->addProduct();    break;
                 case ID_PLUS:  self->changeStock(+1); break;
                 case ID_MINUS: self->changeStock(-1); break;
                 case ID_CLOSE: DestroyWindow(h);      break;
-                case ID_PRICE: self->updatePrice(); break;        //////////////////////
-                case ID_DELETE: self->deleteProduct(); break;     //////////////////////
+                case ID_PRICE: self->updatePrice();   break;
+                case ID_DELETE: self->deleteProduct(); break;
             }
             return 0;
         }
-        if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
+        if (msg == WM_DESTROY) { 
+            PostQuitMessage(0); 
+            return 0; 
+        }
         return DefWindowProcA(h, msg, w, l);
     }
  
 public:
-    GUIController(vector<Product>& productList)
-        : window(NULL), list(NULL), nameEdit(NULL), priceEdit(NULL),
-          stockEdit(NULL), products(productList), nextId(1000) {}
+    GUIController(vector<Product>& productList, string role)
+        : window(NULL), tabControl(NULL), inventoryList(NULL), ordersList(NULL),
+          nameEdit(NULL), priceEdit(NULL), stockEdit(NULL), supplierEdit(NULL),
+          products(productList), currentUserRole(role) {}
  
     void openMainWindow() {
-        cout << "[GUI] Opening Smart Warehouse Desktop Window (Win32)..." << endl;
- 
-        INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES };
-        InitCommonControlsEx(&icc);
+        INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES };
+        if (!InitCommonControlsEx(&icc)) {
+            cerr << "[GUI Error] InitCommonControlsEx failed. Error: " << GetLastError() << endl;
+        }
  
         WNDCLASSA wc = {};
         wc.lpfnWndProc   = windowProc;
@@ -582,48 +509,101 @@ public:
         wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.lpszClassName = "WarehouseWindow";
-        RegisterClassA(&wc);
+        
+        if (!RegisterClassA(&wc)) {
+            DWORD err = GetLastError();
+            // ERROR_CLASS_ALREADY_EXISTS (1410) is fine, anything else might be an issue
+            if (err != ERROR_CLASS_ALREADY_EXISTS) {
+                cerr << "[GUI Error] RegisterClassA failed. Error: " << err << endl;
+            }
+        }
  
-        window = CreateWindowExA(0, "WarehouseWindow", "Smart Warehouse System",
-                                 WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                                 CW_USEDEFAULT, CW_USEDEFAULT, 716, 500,
-                                 NULL, NULL, wc.hInstance, this);
+        string windowTitle = "Smart Warehouse System - Logged in as: " + currentUserRole;
+        window = CreateWindowExA(
+            0, 
+            "WarehouseWindow", 
+            windowTitle.c_str(),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, // Ensure standard visible overlapping window style
+            CW_USEDEFAULT, CW_USEDEFAULT, 720, 520,
+            NULL, NULL, wc.hInstance, this
+        );
+
+        if (!window) {
+            cerr << "[GUI Error] CreateWindowExA failed. Error: " << GetLastError() << endl;
+            return;
+        }
+
+        // Tab Control Setup
+        tabControl = makeControl(WC_TABCONTROLA, "", WS_CHILD | WS_VISIBLE | TCS_TABS, 10, 10, 685, 290, ID_TAB);
+        if (!tabControl) {
+            cerr << "[GUI Error] Tab control creation failed. Error: " << GetLastError() << endl;
+        }
+
+        TCITEMA tie = {};
+        tie.mask = TCIF_TEXT;
+        tie.pszText = (LPSTR)"Inventory Management (Products)";
+        TabCtrl_InsertItem(tabControl, 0, &tie);
+
+        // Add Orders tab ONLY if role is Manager
+        if (currentUserRole == "Manager") {
+            tie.pszText = (LPSTR)"Orders & Deliveries";
+            TabCtrl_InsertItem(tabControl, 1, &tie);
+        }
  
-        list = makeControl(WC_LISTVIEWA, "", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER,
-                           10, 10, 680, 290);
-        ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
- 
+        // Inventory List View
+        inventoryList = makeControl(WC_LISTVIEWA, "", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_CHILD | WS_VISIBLE | WS_BORDER,
+                                    15, 40, 675, 250);
+        ListView_SetExtendedListViewStyle(inventoryList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
         const char* titles[] = { "ID", "Name", "Price", "Stock" };
-        int widths[]         = {  70,   320,    140,     130 };
+        int widths[]         = {  70,   310,    140,     135 };
         for (int i = 0; i < 4; i++) {
             LVCOLUMNA col = {};
             col.mask    = LVCF_TEXT | LVCF_WIDTH;
             col.pszText = (LPSTR)titles[i];
             col.cx      = widths[i];
-            SendMessageA(list, LVM_INSERTCOLUMNA, i, (LPARAM)&col);
+            ListView_InsertColumn(inventoryList, i, &col);
+        }
+
+        // Orders List View (Manager Only Tab - Initially Hidden)
+        ordersList = makeControl(WC_LISTVIEWA, "", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_CHILD | WS_BORDER,
+                                  15, 40, 675, 250);
+        ListView_SetExtendedListViewStyle(ordersList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+        const char* orderTitles[] = { "Product Name", "Order Type", "Price", "Quantity", "Status", "Full Timestamp" };
+        int orderWidths[]         = {      130,            120,        90,        70,         110,           155 };
+        for (int i = 0; i < 6; i++) {
+            LVCOLUMNA col = {};
+            col.mask    = LVCF_TEXT | LVCF_WIDTH;
+            col.pszText = (LPSTR)orderTitles[i];
+            col.cx      = orderWidths[i];
+            ListView_InsertColumn(ordersList, i, &col);
         }
  
-        makeControl("STATIC", "Product name", 0, 10, 315, 120, 18);
-        makeControl("STATIC", "Price", 0, 320, 315, 100, 18);
-        makeControl("STATIC", "Stock / Amount", 0, 440, 315, 120, 18);
-        makeControl("STATIC", "Supplier ID", 0, 560, 315, 100, 18);        ///////////////////////added
-        nameEdit  = makeControl("EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 10, 335, 300, 24);
-        priceEdit = makeControl("EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 320, 335, 110, 24);
-        stockEdit = makeControl("EDIT", "", WS_BORDER | ES_NUMBER, 440, 335, 110, 24);
-        supplierEdit = makeControl("EDIT", "1", WS_BORDER | ES_NUMBER, 560, 335, 80, 24); ///////////////////////added
+        ShowWindow(ordersList, SW_HIDE);   // makeControl adds WS_VISIBLE, so hide it until the Orders tab is picked
+
+        makeControl("STATIC", "Product name", 0, 15, 315, 120, 18);
+        makeControl("STATIC", "Price", 0, 325, 315, 100, 18);
+        makeControl("STATIC", "Stock", 0, 435, 315, 80, 18);
+        makeControl("STATIC", "Supplier ID", 0, 525, 315, 80, 18);
+        
+        nameEdit  = makeControl("EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 15, 335, 300, 24);
+        priceEdit = makeControl("EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 325, 335, 95, 24);
+        stockEdit = makeControl("EDIT", "", WS_BORDER | ES_NUMBER, 435, 335, 75, 24);
+        supplierEdit = makeControl("EDIT", "1", WS_BORDER | ES_NUMBER, 525, 335, 75, 24);
  
-        makeControl("BUTTON", "Add Product",      BS_PUSHBUTTON, 10, 385, 130, 32, ID_ADD);
-        makeControl("BUTTON", "Add Stock (+)",    BS_PUSHBUTTON, 150, 385, 130, 32, ID_PLUS);
-        makeControl("BUTTON", "Remove Stock (-)", BS_PUSHBUTTON, 290, 385, 150, 32, ID_MINUS);
-        makeControl("BUTTON", "Close",            BS_PUSHBUTTON, 590, 385, 100, 32, ID_CLOSE);
-        makeControl("BUTTON", "Update Price", BS_PUSHBUTTON, 450, 385, 130, 32, ID_PRICE); ///////////////////////added
-        makeControl("BUTTON", "Delete Product", BS_PUSHBUTTON, 450, 425, 130, 32, ID_DELETE);///////////////////////added
+        makeControl("BUTTON", "Add Product",      BS_PUSHBUTTON, 15, 385, 120, 32, ID_ADD);
+        makeControl("BUTTON", "Add Stock (+)",    BS_PUSHBUTTON, 145, 385, 120, 32, ID_PLUS);
+        makeControl("BUTTON", "Remove Stock (-)", BS_PUSHBUTTON, 275, 385, 130, 32, ID_MINUS);
+        makeControl("BUTTON", "Update Price",     BS_PUSHBUTTON, 415, 385, 120, 32, ID_PRICE);
+        makeControl("BUTTON", "Delete Product",   BS_PUSHBUTTON, 545, 385, 135, 32, ID_DELETE);
+        makeControl("BUTTON", "Close App",        BS_PUSHBUTTON, 580, 425, 100, 32, ID_CLOSE);
  
         EnumChildWindows(window, applyFont, 0);
-        refreshTable();
+        refreshInventoryTable();
  
         ShowWindow(window, SW_SHOW);
         UpdateWindow(window);
+        SetForegroundWindow(window);
+        SetFocus(window);
  
         MSG msg;
         while (GetMessageA(&msg, NULL, 0, 0) > 0) {
@@ -632,8 +612,8 @@ public:
         }
     }
  
-    void refreshTable() {
-        ListView_DeleteAllItems(list);
+    void refreshInventoryTable() {
+        ListView_DeleteAllItems(inventoryList);
         for (size_t i = 0; i < products.size(); i++) {
             const Product& p = products[i];
             char idText[32], priceText[32], stockText[32];
@@ -646,70 +626,220 @@ public:
             item.mask     = LVIF_TEXT;
             item.iItem    = (int)i;
             item.pszText  = idText;
-            ListView_InsertItem(list, &item);
-            ListView_SetItemText(list, (int)i, 1, (LPSTR)name.c_str());
-            ListView_SetItemText(list, (int)i, 2, priceText);
-            ListView_SetItemText(list, (int)i, 3, stockText);
+            ListView_InsertItem(inventoryList, &item);
+            ListView_SetItemText(inventoryList, (int)i, 1, (LPSTR)name.c_str());
+            ListView_SetItemText(inventoryList, (int)i, 2, priceText);
+            ListView_SetItemText(inventoryList, (int)i, 3, stockText);
         }
     }
  
-    void displayInventoryTable(const vector<Product>&) { refreshTable(); }
- 
     void showAlertPopup(string message) {
-        cout << "[GUI Alert Popup]: " << message << endl;
-        MessageBoxA(window, message.c_str(), "Warehouse Alert", MB_OK | MB_ICONWARNING);
+        MessageBoxA(window, message.c_str(), "Warehouse System Notice", MB_OK | MB_ICONINFORMATION);
     }
 };
 
 
 // ============================================================================
-// MAIN APPLICATION ENTRY POINT (Integration & Testing)
+// CLASS: LoginController (Win32 role-choice + login screens)
+// ============================================================================
+class LoginController {
+private:
+    enum { ID_MANAGER = 200, ID_CLERK, ID_LOGIN, ID_BACK };
+
+    HWND window;
+    HWND titleLabel, managerBtn, clerkBtn;
+    HWND userLabel, passLabel, userEdit, passEdit, loginBtn, backBtn;
+    int screen;              // 0 = choose role, 1 = login form
+    string selectedRole;
+    bool loggedIn;
+
+    HWND make(const char* cls, const char* text, DWORD style,
+              int x, int y, int w, int h, int id = 0) {
+        return CreateWindowExA(0, cls, text, WS_CHILD | WS_VISIBLE | style,
+                               x, y, w, h, window, (HMENU)(INT_PTR)id,
+                               GetModuleHandleA(NULL), NULL);
+    }
+
+    string getText(HWND edit) const {
+        char buf[256];
+        GetWindowTextA(edit, buf, sizeof(buf));
+        return string(buf);
+    }
+
+    void showRoleScreen() {
+        screen = 0;
+        selectedRole = "";
+        SetWindowTextA(titleLabel, "Welcome! Please choose your role:");
+        ShowWindow(managerBtn, SW_SHOW);
+        ShowWindow(clerkBtn,   SW_SHOW);
+        ShowWindow(userLabel,  SW_HIDE);
+        ShowWindow(passLabel,  SW_HIDE);
+        ShowWindow(userEdit,   SW_HIDE);
+        ShowWindow(passEdit,   SW_HIDE);
+        ShowWindow(loginBtn,   SW_HIDE);
+        ShowWindow(backBtn,    SW_HIDE);
+    }
+
+    void showLoginScreen(const string& role) {
+        screen = 1;
+        selectedRole = role;
+        string t = role + " Login";
+        SetWindowTextA(titleLabel, t.c_str());
+        ShowWindow(managerBtn, SW_HIDE);
+        ShowWindow(clerkBtn,   SW_HIDE);
+        ShowWindow(userLabel,  SW_SHOW);
+        ShowWindow(passLabel,  SW_SHOW);
+        ShowWindow(userEdit,   SW_SHOW);
+        ShowWindow(passEdit,   SW_SHOW);
+        ShowWindow(loginBtn,   SW_SHOW);
+        ShowWindow(backBtn,    SW_SHOW);
+        SetWindowTextA(userEdit, "");
+        SetWindowTextA(passEdit, "");
+        SetFocus(userEdit);
+    }
+
+    void tryLogin() {
+        string correctUser = (selectedRole == "Manager") ? "yassin" : "gamila";
+        string correctPass = (selectedRole == "Manager") ? "123"    : "456";
+
+        if (getText(userEdit) == correctUser && getText(passEdit) == correctPass) {
+            loggedIn = true;
+            DestroyWindow(window);
+        } else {
+            MessageBoxA(window, "Incorrect username or password.", "Login Failed", MB_OK | MB_ICONWARNING);
+            SetWindowTextA(passEdit, "");
+            SetFocus(passEdit);
+        }
+    }
+
+    static BOOL CALLBACK applyFont(HWND child, LPARAM) {
+        SendMessageA(child, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        return TRUE;
+    }
+
+    static LRESULT CALLBACK windowProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+        if (msg == WM_NCCREATE) {
+            CREATESTRUCTA* cs = (CREATESTRUCTA*)l;
+            SetWindowLongPtrA(h, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+            return DefWindowProcA(h, msg, w, l);
+        }
+        LoginController* self = (LoginController*)GetWindowLongPtrA(h, GWLP_USERDATA);
+
+        if (msg == WM_COMMAND && self) {
+            switch (LOWORD(w)) {
+                case ID_MANAGER: self->showLoginScreen("Manager"); break;
+                case ID_CLERK:   self->showLoginScreen("Clerk");   break;
+                case ID_LOGIN:   self->tryLogin();                 break;
+                case ID_BACK:    self->showRoleScreen();           break;
+                case IDOK:       if (self->screen == 1) self->tryLogin(); break;      // Enter key
+                case IDCANCEL:   if (self->screen == 1) self->showRoleScreen(); break; // Esc key
+            }
+            return 0;
+        }
+        if (msg == WM_CLOSE) { DestroyWindow(h); return 0; }
+        if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
+        return DefWindowProcA(h, msg, w, l);
+    }
+
+public:
+    LoginController()
+        : window(NULL), titleLabel(NULL), managerBtn(NULL), clerkBtn(NULL),
+          userLabel(NULL), passLabel(NULL), userEdit(NULL), passEdit(NULL),
+          loginBtn(NULL), backBtn(NULL), screen(0), loggedIn(false) {}
+
+    // Shows the role screen, then the login screen. Returns true and fills
+    // roleOut ("Manager"/"Clerk") only if the user logged in successfully.
+    bool run(string& roleOut) {
+        WNDCLASSA wc = {};
+        wc.lpfnWndProc   = windowProc;
+        wc.hInstance     = GetModuleHandleA(NULL);
+        wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = "WarehouseLoginWindow";
+        if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            cerr << "[GUI Error] RegisterClassA (login) failed. Error: " << GetLastError() << endl;
+            return false;
+        }
+
+        const int clientW = 360, clientH = 260;
+        DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+        RECT r = { 0, 0, clientW, clientH };
+        AdjustWindowRect(&r, style, FALSE);
+        int winW = r.right - r.left, winH = r.bottom - r.top;
+        int x = (GetSystemMetrics(SM_CXSCREEN) - winW) / 2;
+        int y = (GetSystemMetrics(SM_CYSCREEN) - winH) / 2;
+
+        window = CreateWindowExA(0, "WarehouseLoginWindow", "Smart Warehouse System",
+                                 style, x, y, winW, winH, NULL, NULL, wc.hInstance, this);
+        if (!window) {
+            cerr << "[GUI Error] CreateWindowExA (login) failed. Error: " << GetLastError() << endl;
+            return false;
+        }
+
+        titleLabel = make("STATIC", "", SS_CENTER, 20, 25, 320, 24);
+        managerBtn = make("BUTTON", "Manager", BS_PUSHBUTTON | WS_TABSTOP, 80,  75, 200, 45, ID_MANAGER);
+        clerkBtn   = make("BUTTON", "Clerk",   BS_PUSHBUTTON | WS_TABSTOP, 80, 135, 200, 45, ID_CLERK);
+
+        userLabel = make("STATIC", "Username", 0, 50, 70, 260, 18);
+        userEdit  = make("EDIT", "", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 50, 90, 260, 24);
+        passLabel = make("STATIC", "Password", 0, 50, 125, 260, 18);
+        passEdit  = make("EDIT", "", WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP, 50, 145, 260, 24);
+        loginBtn  = make("BUTTON", "Login", BS_DEFPUSHBUTTON | WS_TABSTOP, 50,  195, 125, 32, ID_LOGIN);
+        backBtn   = make("BUTTON", "Back",  BS_PUSHBUTTON | WS_TABSTOP,    185, 195, 125, 32, ID_BACK);
+
+        EnumChildWindows(window, applyFont, 0);
+        showRoleScreen();
+
+        ShowWindow(window, SW_SHOW);
+        UpdateWindow(window);
+        SetForegroundWindow(window);
+
+        MSG msg;
+        while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+            if (!IsDialogMessageA(window, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageA(&msg);
+            }
+        }
+
+        if (loggedIn) {
+            roleOut = selectedRole;
+            return true;
+        }
+        return false;
+    }
+};
+
+
+// ============================================================================
+// MAIN APPLICATION ENTRY POINT
 // ============================================================================
 int main() {
-    cout << "=== Smart Warehouse Inventory & Order Tracking System ===" << endl << endl;
+    cout << "=== Smart Warehouse Inventory & Order Tracking System ===" << endl;
 
-    // 1. Initialize Database Connection & Tables (Leader Yassin)
     DatabaseManager& db = DatabaseManager::getInstance();
     if (db.connect()) {
         db.initializeTables();
     }
 
-    // 2. Test User Authentication (Member 1)
-    User clerk(1, "warehouse_clerk", "pass123", "Clerk");
-    clerk.displayUser();
+    // Step 1 + 2: Role choice screen, then login screen (both are real windows)
+    LoginController login;
+    string selectedRole;
+    if (!login.run(selectedRole)) {
+        cout << "[Login] Cancelled or closed." << endl;
+        return 0;
+    }
+    cout << "[Login Success] Access granted as " << selectedRole << ". Launching main window..." << endl;
 
-    // 3. Load Inventory Dynamically from PostgreSQL Database
     vector<Product> productList = db.loadProductsFromDB();
-
-    // Fallback if database is empty
     if (productList.empty()) {
         productList.push_back(Product(101, "Steel Bracket", 12.50, 200, 1));
         productList.push_back(Product(102, "Conveyor Belt Motor", 450.00, 5, 2));
     }
 
-    cout << "\nCurrent Inventory:" << endl;
-    for (const auto& prod : productList) {
-        prod.displayProduct();
-    }
-
-    // 4. Test Supplier Management (Member 3)
-    Supplier supplier(501, "Industrial Parts Ltd", "sales@indparts.com");
-    supplier.addSuppliedProduct(101);
-    supplier.displaySupplier();
-
-    // 5. Test Order Processing (Member 4)
-    Order myOrder(9001);
-    if (!productList.empty()) {
-        myOrder.addProduct(productList[0], 10);
-    }
-    myOrder.setStatus("Completed");
-    myOrder.displayOrder();
-
-    // 6. Test GUI Controller (Member 5)
-    GUIController gui(productList);
-    gui.showAlertPopup("Warehouse System Initialized Successfully from PostgreSQL!");
+    // Step 3: Main program window (Manager also gets the Orders & Deliveries tab)
+    GUIController gui(productList, selectedRole);
     gui.openMainWindow();
 
-    cout << "\nProgram executed successfully." << endl;
     return 0;
 }
