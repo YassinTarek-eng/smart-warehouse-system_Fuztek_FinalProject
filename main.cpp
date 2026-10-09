@@ -108,16 +108,143 @@ public:
 
 
 // ============================================================================
-// CLASS: DatabaseManager
+// CLASS: User (holds the Manager / Clerk accounts used by the login screen)
 // ============================================================================
-struct OrderRecord {
-    string name, type, price, qty, status, time;
+class User {
+private:
+    int userId;
+    string username;
+    string password;
+    string role; // "Manager" or "Clerk"
+
+public:
+    User(int id, string uname, string pwd, string r)
+        : userId(id), username(uname), password(pwd), role(r) {}
+
+    int getId() const { 
+        return userId; 
+    }
+    string getUsername() const { 
+        return username; 
+    }
+    string getRole() const { 
+        return role; 
+    }
+    bool authenticate(const string& input) const { 
+        return password == input; 
+    }
+
+    void displayUser() const {
+        cout << "User: " << username << " [Role: " << role << "]" << endl;
+    }
 };
 
-class User;
-class Supplier;
-class Order;
 
+// ============================================================================
+// CLASS: Supplier
+// ============================================================================
+class Supplier {
+private:
+    int supplierId;
+    string supplierName;
+    string contactEmail;
+    vector<int> suppliedProductIds;
+
+public:
+    Supplier(int id, string name, string email)
+        : supplierId(id), supplierName(name), contactEmail(email) {}
+
+    int getId() const 
+    { 
+        return supplierId; 
+    }
+    string getName() const 
+    { 
+        return supplierName; 
+    }
+    string getEmail() const 
+    { 
+        return contactEmail; 
+    }
+    const vector<int>& getProductIds() const 
+    { 
+        return suppliedProductIds; 
+    }
+
+    void addSuppliedProduct(int productId) {
+        if (find(suppliedProductIds.begin(), suppliedProductIds.end(), productId) == suppliedProductIds.end())
+            suppliedProductIds.push_back(productId);
+    }
+
+    void displaySupplier() const {
+        cout << "Supplier: " << supplierName << " (Contact: " << contactEmail << ")" << endl;
+    }
+};
+
+
+// ============================================================================
+// CLASS: Order
+//   type: "Requested Supply"  = warehouse asked a supplier for stock
+//         "Incoming Delivery" = stock that is on its way to the warehouse
+// ============================================================================
+class Order {
+private:
+    int orderId;
+    string productName;
+    string type;
+    double unitPrice;
+    int quantity;
+    string status;    // e.g. "Pending Delivery", "Dispatched", "Delivered"
+    string createdAt;
+
+public:
+    Order(int id, string name, string orderType, double price, int qty,
+          string orderStatus, string time = "")
+        : orderId(id), productName(name), type(orderType), unitPrice(price),
+          quantity(qty), status(orderStatus), createdAt(time) {}
+
+    int getId() const { 
+        return orderId; 
+    }
+    string getProductName() const { 
+        return productName; 
+    }
+    string getType() const { 
+        return type; 
+    }
+    double getUnitPrice() const { 
+        return unitPrice; 
+    }
+    int getQuantity() const { 
+        return quantity; 
+    }
+    double getTotal() const { 
+        return unitPrice * quantity; 
+    }
+    string getStatus() const { 
+        return status; 
+    }
+    string getCreatedAt() const { 
+        return createdAt; 
+    }
+    bool isIncomingDelivery() const { 
+        return type == "Incoming Delivery"; 
+    }
+
+    void setStatus(const string& s) { 
+        status = s; 
+    }
+
+    void displayOrder() const {
+        cout << "Order #" << orderId << " | " << productName << " | " << type
+             << " | Qty: " << quantity << " | Status: " << status << endl;
+    }
+};
+
+
+// ============================================================================
+// CLASS: DatabaseManager
+// ============================================================================
 class DatabaseManager {
 private:
     pqxx::connection* conn;
@@ -209,6 +336,11 @@ public:
         executeQuery(suppliersTable);
         executeQuery(productsTable);
         executeQuery(ordersTable);
+
+        // First supplier, so the default Supplier ID "1" in the GUI is valid
+        executeQuery("INSERT INTO suppliers (name, email) SELECT 'Industrial Parts Ltd', 'sales@indparts.com' "
+                     "WHERE NOT EXISTS (SELECT 1 FROM suppliers);");
+
         cout << "[Database] Warehouse database tables initialized successfully." << endl;
     }
 
@@ -236,29 +368,57 @@ public:
         return dbProducts;
     }
 
-    vector<OrderRecord> loadOrdersFromDB() {
-        vector<OrderRecord> out;
+    vector<Order> loadOrdersFromDB() {
+        vector<Order> out;
         try {
             if (!conn || !conn->is_open()) {
                 return out;
             }
             pqxx::work txn(*conn);
             pqxx::result res = txn.exec(
-                "SELECT product_name, type, price, quantity, status, "
+                "SELECT id, product_name, type, price, quantity, status, "
                 "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created "
                 "FROM orders ORDER BY id DESC;");
             for (auto row : res) {
-                OrderRecord o;
-                o.name   = row["product_name"].as<string>();
-                o.type   = row["type"].as<string>();
-                o.price  = "$" + row["price"].as<string>();
-                o.qty    = row["quantity"].as<string>();
-                o.status = row["status"].as<string>();
-                o.time   = row["created"].as<string>();
-                out.push_back(o);
+                out.push_back(Order(row["id"].as<int>(),
+                                    row["product_name"].as<string>(),
+                                    row["type"].as<string>(),
+                                    row["price"].as<double>(),
+                                    row["quantity"].as<int>(),
+                                    row["status"].as<string>(),
+                                    row["created"].as<string>()));
             }
         } catch (const exception& e) {
             cerr << "[Load Orders Error]: " << e.what() << endl;
+        }
+        return out;
+    }
+
+    vector<Supplier> loadSuppliersFromDB() {
+        vector<Supplier> out;
+        try {
+            if (!conn || !conn->is_open()) {
+                return out;
+            }
+            pqxx::work txn(*conn);
+            pqxx::result sres = txn.exec("SELECT id, name, email FROM suppliers ORDER BY id;");
+            for (auto row : sres) {
+                out.push_back(Supplier(row["id"].as<int>(),
+                                       row["name"].as<string>(),
+                                       row["email"].as<string>()));
+            }
+
+            pqxx::result pres = txn.exec("SELECT id, supplier_id FROM products WHERE supplier_id IS NOT NULL;");
+            for (auto row : pres) {
+                int supplierId = row["supplier_id"].as<int>();
+                for (auto& s : out) {
+                    if (s.getId() == supplierId) {
+                        s.addSuppliedProduct(row["id"].as<int>());
+                    }
+                }
+            }
+        } catch (const exception& e) {
+            cerr << "[Load Suppliers Error]: " << e.what() << endl;
         }
         return out;
     }
@@ -303,6 +463,7 @@ private:
     HWND ordersList;
     HWND nameEdit, priceEdit, stockEdit, supplierEdit;
     vector<Product>& products;
+    vector<Supplier>& suppliers;
     string currentUserRole;
  
     string getText(HWND edit) const {
@@ -321,24 +482,33 @@ private:
     void loadOrdersIntoView() {
         ListView_DeleteAllItems(ordersList);
 
-        vector<OrderRecord> rows = DatabaseManager::getInstance().loadOrdersFromDB();
+        vector<Order> rows = DatabaseManager::getInstance().loadOrdersFromDB();
         if (rows.empty()) {
             // Sample rows so the tab is never blank (DB offline or no orders yet)
-            rows.push_back({"Steel Bracket",  "Requested Supply",  "$12.50",  "50", "Pending Delivery", "2026-10-08 10:15:00"});
-            rows.push_back({"Conveyor Motor", "Incoming Delivery", "$450.00", "5",  "Dispatched",       "2026-10-08 12:30:00"});
+            rows.push_back(Order(0, "Steel Bracket",  "Requested Supply",  12.50,  50, "Pending Delivery", "2026-10-08 10:15:00"));
+            rows.push_back(Order(0, "Conveyor Motor", "Incoming Delivery", 450.00, 5,  "Dispatched",       "2026-10-08 12:30:00"));
         }
 
         for (size_t i = 0; i < rows.size(); i++) {
+            const Order& o = rows[i];
+            string name = o.getProductName();
+            string type = o.getType();
+            string status = o.getStatus();
+            string time = o.getCreatedAt();
+            char priceText[32], qtyText[32];
+            snprintf(priceText, sizeof(priceText), "$%.2f", o.getUnitPrice());
+            snprintf(qtyText, sizeof(qtyText), "%d", o.getQuantity());
+
             LVITEMA item = {};
             item.mask = LVIF_TEXT;
             item.iItem = (int)i;
-            item.pszText = (LPSTR)rows[i].name.c_str();
+            item.pszText = (LPSTR)name.c_str();
             ListView_InsertItem(ordersList, &item);
-            ListView_SetItemText(ordersList, (int)i, 1, (LPSTR)rows[i].type.c_str());
-            ListView_SetItemText(ordersList, (int)i, 2, (LPSTR)rows[i].price.c_str());
-            ListView_SetItemText(ordersList, (int)i, 3, (LPSTR)rows[i].qty.c_str());
-            ListView_SetItemText(ordersList, (int)i, 4, (LPSTR)rows[i].status.c_str());
-            ListView_SetItemText(ordersList, (int)i, 5, (LPSTR)rows[i].time.c_str());
+            ListView_SetItemText(ordersList, (int)i, 1, (LPSTR)type.c_str());
+            ListView_SetItemText(ordersList, (int)i, 2, priceText);
+            ListView_SetItemText(ordersList, (int)i, 3, qtyText);
+            ListView_SetItemText(ordersList, (int)i, 4, (LPSTR)status.c_str());
+            ListView_SetItemText(ordersList, (int)i, 5, (LPSTR)time.c_str());
         }
     }
 
@@ -353,12 +523,24 @@ private:
             return;
         }
 
+        bool supplierFound = false;
+        for (const Supplier& s : suppliers) {
+            if (s.getId() == supplierId) {
+                supplierFound = true;
+            }
+        }
+        if (!supplierFound) {
+            showAlertPopup("No supplier with that ID exists.");
+            return;
+        }
+
         DatabaseManager& db = DatabaseManager::getInstance();
         string sql = "INSERT INTO products (name, quantity, price, category_id, supplier_id) VALUES ('" + 
                      name + "', " + to_string(stock) + ", " + to_string(price) + ", 1, " + to_string(supplierId) + ");";
         
         if (db.executeQuery(sql)) {
             products = db.loadProductsFromDB();
+            suppliers = db.loadSuppliersFromDB();
             refreshInventoryTable();
             SetWindowTextA(nameEdit, "");
             SetWindowTextA(priceEdit, "");
@@ -440,6 +622,7 @@ private:
         DatabaseManager& db = DatabaseManager::getInstance();
         if (db.deleteProductFromDB(productId)) {
             products = db.loadProductsFromDB();
+            suppliers = db.loadSuppliersFromDB();
             refreshInventoryTable();
             showAlertPopup("Product successfully deleted from database!");
         }
@@ -492,10 +675,10 @@ private:
     }
  
 public:
-    GUIController(vector<Product>& productList, string role)
+    GUIController(vector<Product>& productList, vector<Supplier>& supplierList, string role)
         : window(NULL), tabControl(NULL), inventoryList(NULL), ordersList(NULL),
           nameEdit(NULL), priceEdit(NULL), stockEdit(NULL), supplierEdit(NULL),
-          products(productList), currentUserRole(role) {}
+          products(productList), suppliers(supplierList), currentUserRole(role) {}
  
     void openMainWindow() {
         INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES };
@@ -652,6 +835,7 @@ private:
     int screen;              // 0 = choose role, 1 = login form
     string selectedRole;
     bool loggedIn;
+    const vector<User>& users;   // accounts that are allowed to log in
 
     HWND make(const char* cls, const char* text, DWORD style,
               int x, int y, int w, int h, int id = 0) {
@@ -699,17 +883,20 @@ private:
     }
 
     void tryLogin() {
-        string correctUser = (selectedRole == "Manager") ? "yassin" : "gamila";
-        string correctPass = (selectedRole == "Manager") ? "123"    : "456";
+        string typedUser = getText(userEdit);
+        string typedPass = getText(passEdit);
 
-        if (getText(userEdit) == correctUser && getText(passEdit) == correctPass) {
-            loggedIn = true;
-            DestroyWindow(window);
-        } else {
-            MessageBoxA(window, "Incorrect username or password.", "Login Failed", MB_OK | MB_ICONWARNING);
-            SetWindowTextA(passEdit, "");
-            SetFocus(passEdit);
+        for (const User& u : users) {
+            if (u.getRole() == selectedRole && u.getUsername() == typedUser && u.authenticate(typedPass)) {
+                loggedIn = true;
+                DestroyWindow(window);
+                return;
+            }
         }
+
+        MessageBoxA(window, "Incorrect username or password.", "Login Failed", MB_OK | MB_ICONWARNING);
+        SetWindowTextA(passEdit, "");
+        SetFocus(passEdit);
     }
 
     static BOOL CALLBACK applyFont(HWND child, LPARAM) {
@@ -742,10 +929,10 @@ private:
     }
 
 public:
-    LoginController()
+    LoginController(const vector<User>& userList)
         : window(NULL), titleLabel(NULL), managerBtn(NULL), clerkBtn(NULL),
           userLabel(NULL), passLabel(NULL), userEdit(NULL), passEdit(NULL),
-          loginBtn(NULL), backBtn(NULL), screen(0), loggedIn(false) {}
+          loginBtn(NULL), backBtn(NULL), screen(0), loggedIn(false), users(userList) {}
 
     // Shows the role screen, then the login screen. Returns true and fills
     // roleOut ("Manager"/"Clerk") only if the user logged in successfully.
@@ -822,8 +1009,14 @@ int main() {
         db.initializeTables();
     }
 
+    // Accounts allowed to log in (managed by the User class)
+    vector<User> users = {
+        User(1, "yassin", "123", "Manager"),
+        User(2, "gamila", "456", "Clerk")
+    };
+
     // Step 1 + 2: Role choice screen, then login screen (both are real windows)
-    LoginController login;
+    LoginController login(users);
     string selectedRole;
     if (!login.run(selectedRole)) {
         cout << "[Login] Cancelled or closed." << endl;
@@ -837,8 +1030,10 @@ int main() {
         productList.push_back(Product(102, "Conveyor Belt Motor", 450.00, 5, 2));
     }
 
+    vector<Supplier> supplierList = db.loadSuppliersFromDB();
+
     // Step 3: Main program window (Manager also gets the Orders & Deliveries tab)
-    GUIController gui(productList, selectedRole);
+    GUIController gui(productList, supplierList, selectedRole);
     gui.openMainWindow();
 
     return 0;
